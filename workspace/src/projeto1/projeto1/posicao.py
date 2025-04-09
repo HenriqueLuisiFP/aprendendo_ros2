@@ -3,6 +3,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import JointState, LaserScan
 from std_msgs.msg import Header, Float64
+from geometry_msgs.msg import Twist
 import time
 import numpy as np
 import random
@@ -24,8 +25,8 @@ class NoDePosicao(Node):
         # Publisher
         self.publisher = self.create_publisher(JointState, '/joint_state', qos_profile)
         self.publisher_x = self.create_publisher(Float64, '/robot_x', qos_profile)
+        self.publisher_cmd_vel = self.create_publisher(Twist, '/cmd_vel', qos_profile)
 
-        
         self.timer = self.create_timer(0.5, self.update_position)
 
         # Constantes

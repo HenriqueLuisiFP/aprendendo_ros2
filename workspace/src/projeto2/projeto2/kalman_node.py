@@ -4,6 +4,7 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 import tf_transformations
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Header
+from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Pose2D
 from nav_msgs.msg import Odometry
 import random
@@ -24,7 +25,7 @@ class kalmannode(Node):
         # Publishers
         self.laser_publisher = self.create_publisher(LaserScan, '/laser_data', qos_profile)
         self.pose_publisher = self.create_publisher(Pose2D, '/pose', qos_profile)
-
+        self.publisher_cmd_vel = self.create_publisher(Twist, '/cmd_vel', qos_profile)
         self.timer = self.create_timer(0.1, self.update)
         
         #Parameters
@@ -112,6 +113,7 @@ class kalmannode(Node):
 
         self.pose = estimated_pose
         self.publish_pose()
+        self.publicar_comando()
 
     def publish_pose(self):
         msg = Pose2D()
@@ -120,6 +122,14 @@ class kalmannode(Node):
         msg.theta = self.pose[2]
         self.pose_publisher.publish(msg)
         self.get_logger().info(f'Publishing pose -> x: {msg.x:.2f}, y: {msg.y:.2f}, theta: {math.degrees(msg.theta):.2f}°')
+
+    def publicar_comando(self):
+       
+        msg = Twist()
+        msg.linear.x = 0.2
+        msg.angular.z = 0.1
+        self.publisher_cmd_vel.publish(msg)
+        
 
     def __del__(self):
         self.get_logger().info('SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIIIII')
