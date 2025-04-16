@@ -25,7 +25,7 @@ class kalmannode(Node):
         # Publishers
         self.laser_publisher = self.create_publisher(LaserScan, '/laser_data', qos_profile)
         self.pose_publisher = self.create_publisher(Pose2D, '/pose', qos_profile)
-        self.publisher_cmd_vel = self.create_publisher(Twist, '/cmd_vel', qos_profile)
+        self.publisher_cmd_vel = self.create_publisher(Twist, '/cmd_vel', 10)
         self.timer = self.create_timer(0.1, self.update)
         
         #Parameters
@@ -48,9 +48,11 @@ class kalmannode(Node):
         self.v = 0.5
         self.radius = 2
         self.w = self.v / self.radius
-        self.dt = 0.1
-
-    def odom_callback(self, msg):
+        self.dt = 0
+        self.lt = 0
+        self.ct = 0
+       
+    def listener_callback_odom(self, msg):
         x = msg.pose.pose.orientation.x
         y = msg.pose.pose.orientation.y
         z = msg.pose.pose.orientation.z
@@ -60,74 +62,74 @@ class kalmannode(Node):
         self.pose_x = msg.pose.pose.position.x
         self.pose_y = msg.pose.pose.position.y
 
-    def laser_callback(self, msg):
-        pass
+        self.ct = self.get_clock().now().nanoseconds
+        self.dt = (self.ct - self.lt) * 1e-9
+        self.lt = self.ct 
+
 
     def update(self):
+        # 1. Publica velocidade
+        self.velocidade()
+        # 2. Simulação do movimento real com ruído (pose real "verdadeira" que o GPS veria)
         ksi_x = self.sigma_x * random.gauss(0, 1)
         ksi_y = self.sigma_y * random.gauss(0, 1)
         ksi_th = self.sigma_th * random.gauss(0, 1)
         ksi_v = self.sigma_v * random.gauss(0, 1)
         ksi_w = self.sigma_w * random.gauss(0, 1)
 
-        predicted_pose = self.pose.copy()
-        predicted_pose[0] = (predicted_pose[0] + ksi_x) + (self.v + ksi_v) * math.cos(predicted_pose[2] + ksi_th) * self.dt
-        predicted_pose[1] = (predicted_pose[1] + ksi_y) + (self.v + ksi_v) * math.sin(predicted_pose[2] + ksi_th) * self.dt
-        predicted_pose[2] = (predicted_pose[2] + ksi_th) + (self.w + ksi_w) * self.dt
-        self.pose = predicted_pose
+        Pv = self.pose.copy()
+        Pv[0] += (self.v + ksi_v) * math.cos(Pv[2] + ksi_th) * self.dt + ksi_x
+        Pv[1] += (self.v + ksi_v) * math.sin(Pv[2] + ksi_th) * self.dt + ksi_y
+        Pv[2] += (self.w + ksi_w) * self.dt + ksi_th
 
-        # Measurement (simulated GPS)
+        # 3. Simulação da medida (ex: GPS)
         C = np.array([[1, 0, 0], [0, 1, 0]])
-        R = np.array([[self.sigma_z_x*2, 0], [0, self.sigma_z_y*2]])
-        noise = np.dot(np.sqrt(R), np.random.randn(2, 1)).flatten()
-        y = np.dot(C, predicted_pose[:3]) + noise
+        R = np.array([[self.sigma_z_x**2, 0], [0, self.sigma_z_y**2]])
+        ruido = np.dot(np.linalg.cholesky(R), np.random.randn(2, 1)).flatten()
+        y = np.dot(C, Pv) + ruido
 
-        # EKF Estimate
-        estimated_pose = self.pose.copy()
-        estimated_pose[0] += self.v * math.cos(estimated_pose[2]) * self.dt
-        estimated_pose[1] += self.v * math.sin(estimated_pose[2]) * self.dt
-        estimated_pose[2] += self.w * self.dt
+        # 4. EKF: Previsão com base na pose anterior
+        self.Pe = self.pose.copy()
+        self.Pe[0] += self.v * math.cos(self.Pe[2]) * self.dt
+        self.Pe[1] += self.v * math.sin(self.Pe[2]) * self.dt
+        self.Pe[2] += self.w * self.dt
 
-        Q = np.array([[self.sigma_x**2, 0, 0],
-                      [0, self.sigma_y**2, 0],
-                      [0, 0, self.sigma_th**2]])
+        # Matriz de covariância do processo (incerteza no movimento)
+        Q = np.diag([self.sigma_x**2, self.sigma_y**2, self.sigma_th**2])
+        R = np.diag([self.sigma_z_x**2, self.sigma_z_y**2])  # Medição
 
-        M = np.array([[self.sigma_v**2, 0],
-                      [0, self.sigma_w**2]])
-
-        F = np.array([[1, 0, -self.v * math.sin(estimated_pose[2]) * self.dt],
-                      [0, 1, self.v * math.cos(estimated_pose[2]) * self.dt],
-                      [0, 0, 1]])
-
-        G = np.array([[math.cos(estimated_pose[2]) * self.dt, 0],
-                      [math.sin(estimated_pose[2]) * self.dt, 0],
-                      [0, self.dt]])
+        F = np.array([
+            [1, 0, -self.v * math.sin(self.Pe[2]) * self.dt],
+            [0, 1,  self.v * math.cos(self.Pe[2]) * self.dt],
+            [0, 0, 1]
+        ])
 
         H = C
-        z = np.dot(H, estimated_pose)
 
+        # Covariância de erro (poderia ser persistente, mas aqui é estática para simplificar)
         P = Q
-        K = np.dot(P, np.dot(H.T, np.linalg.pinv(np.dot(H, np.dot(P, H.T)) + R)))
-        estimated_pose = estimated_pose + np.dot(K, (y - z))
-        P = np.dot((np.eye(Q.shape[0]) - np.dot(K, H)), P)
 
-        self.pose = estimated_pose
+        z = np.dot(H, self.Pe)  # medida esperada
+        K = np.dot(P, H.T).dot(np.linalg.inv(H.dot(P).dot(H.T) + R))  # ganho de Kalman
+        self.Pe = self.Pe + np.dot(K, (y - z))  # correção
+
+        self.pose = self.Pe
         self.publish_pose()
-        self.publicar_comando()
+        
 
     def publish_pose(self):
         msg = Pose2D()
-        msg.x = self.pose[0]
-        msg.y = self.pose[1]
-        msg.theta = self.pose[2]
+        msg.x = self.Pe[0]
+        msg.y = self.Pe[1]
+        msg.theta = self.Pe[2]
         self.pose_publisher.publish(msg)
         self.get_logger().info(f'Publishing pose -> x: {msg.x:.2f}, y: {msg.y:.2f}, theta: {math.degrees(msg.theta):.2f}°')
 
     def publicar_comando(self):
        
         msg = Twist()
-        msg.linear.x = 0.2
-        msg.angular.z = 0.1
+        msg.linear.x = self.v   
+        msg.angular.z = self.w
         self.publisher_cmd_vel.publish(msg)
         
 
