@@ -1,57 +1,60 @@
 import rclpy
+from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 import tf_transformations
-from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Header
-from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Pose2D
 from nav_msgs.msg import Odometry
 import random
 import math
 import numpy as np
 
-class kalmannode(Node):
+class kalman_node(Node):
     def __init__(self):
-        super().__init__('kalman')
+        super().__init__('posicao')
 
         qos_profile = QoSProfile(depth=10, reliability=QoSReliabilityPolicy.BEST_EFFORT)
 
         # Subscribers
-        self.odom_subscriber = self.create_subscription(Odometry, '/odom', self.odom_callback, qos_profile)
-
-        self.laser_subscriber = self.create_subscription(LaserScan, '/scan', self.laser_callback, qos_profile)
-
+        self.subscription_odom = self.create_subscription(Odometry, '/odom', self.listener_callback_odom, qos_profile)
         # Publishers
-        self.laser_publisher = self.create_publisher(LaserScan, '/laser_data', qos_profile)
-        self.pose_publisher = self.create_publisher(Pose2D, '/pose', qos_profile)
-        self.publisher_cmd_vel = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.timer = self.create_timer(0.1, self.update)
-        
-        #Parameters
-        self.wheel_radius = 0.033
-        self.wheel_distance = 0.178
+        self.velocidade_ = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.publisher_posicao = self.create_publisher(Pose2D, '/posicao', qos_profile)
+
+        #self.timer = self.create_timer(0.01, self.update) 
+
+        # Variáveis de estado
+        self.raio = 0.033
+        self.distancia_rodas = 0.178
         self.pose = [0.0, 0.0, 0.0]  # x, y, theta
 
-        
-        self.sigma_x = 0.001
-        self.sigma_y = 0.001
-        self.sigma_z = 0.001
-        self.sigma_th = math.radians(0.005)
-        self.sigma_v = 0.0005
-        self.sigma_w = math.radians(0.005)
+        # Ruídos
+      
+        self.sigma_x = 0.001  # era 0.005
+        self.sigma_y = 0.001  # era 0.005
+        self.sigma_z = 0.001  # não usado diretamente, mas reduzido também
+        self.sigma_th = math.radians(0.005)  # era 0.01 rad
+        self.sigma_v = 0.0005  # era 0.001
+        self.sigma_w = math.radians(0.005)  # era 0.01 rad
 
-        # Noise 
-        self.sigma_z_x = 0.005
-        self.sigma_z_y = 0.005
+        self.sigma_z_x = 0.005  # era 0.01
+        self.sigma_z_y = 0.005  # era 0.01
 
         self.v = 0.5
-        self.radius = 2
-        self.w = self.v / self.radius
-        self.dt = 0
-        self.lt = 0
-        self.ct = 0
-       
+        self.raio_circ = .5
+        self.w = self.v / self.raio_circ
+        self.ct = self.get_clock().now().nanoseconds
+        self.lt = self.ct
+        self.dt = 0.0
+    def velocidade(self):
+        twist = Twist()
+    
+        twist.linear.x = self.v
+        twist.angular.z = self.w
+
+        self.velocidade_.publish(twist)
+
     def listener_callback_odom(self, msg):
         x = msg.pose.pose.orientation.x
         y = msg.pose.pose.orientation.y
@@ -64,8 +67,8 @@ class kalmannode(Node):
 
         self.ct = self.get_clock().now().nanoseconds
         self.dt = (self.ct - self.lt) * 1e-9
-        self.lt = self.ct 
-
+        self.lt = self.ct
+        self.update()
 
     def update(self):
         # 1. Publica velocidade
@@ -114,32 +117,23 @@ class kalmannode(Node):
         self.Pe = self.Pe + np.dot(K, (y - z))  # correção
 
         self.pose = self.Pe
-        self.publish_pose()
+        self.publicar_posicao()
         
-
-    def publish_pose(self):
+    def publicar_posicao(self):
         msg = Pose2D()
         msg.x = self.Pe[0]
         msg.y = self.Pe[1]
         msg.theta = self.Pe[2]
-        self.pose_publisher.publish(msg)
-        self.get_logger().info(f'Publishing pose -> x: {msg.x:.2f}, y: {msg.y:.2f}, theta: {math.degrees(msg.theta):.2f}°')
-
-    def publicar_comando(self):
-       
-        msg = Twist()
-        msg.linear.x = self.v   
-        msg.angular.z = self.w
-        self.publisher_cmd_vel.publish(msg)
-        
+        self.publisher_posicao.publish(msg)
+        self.get_logger().info(f'Publicando pose -> x: {msg.x:.2f}, y: {msg.y:.2f}, theta: {math.degrees(msg.theta):.2f}°')
 
     def __del__(self):
-        self.get_logger().info('SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIIIII')
-
+        self.get_logger().info('SAISAISAISAISAISIASAI')
+        
 
 def main(args=None):
     rclpy.init(args=args)
-    node = kalmannode()
+    node = kalman_node()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
